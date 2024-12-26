@@ -1,0 +1,13 @@
+networks:
+  cms-network:
+    driver: bridge
+  opensearch-network:
+    driver: bridge
+
+volumes:
+  data_opencart-3:
+  data_opensearch:
+
+include:
+  - ./prod/docker-cms-compose.yml
+  - ./prod/docker-graylog-compose.yml

@@ -1,0 +1,126 @@
+services:
+  telegraf:
+    image: telegraf:1.33.0
+    volumes:
+      - ./conf/telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    networks:
+      - cms-network
+      - graylog-network
+    restart: always
+
+  fluent-bit:
+    image: fluent/fluent-bit:3.2.3
+    user: root
+    volumes:
+      - ./conf/fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - cms-network
+      - graylog-network
+    ports:
+      - "24224:24224"
+    command: ["fluent-bit", "-c", "/fluent-bit/etc/fluent-bit.conf"]
+    healthcheck:
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+    restart: always
+
+  mongodb:
+    image: mongo:5.0
+    volumes:
+      - data_mongodb:/data/db
+    deploy:
+      resources:
+        limits:
+          memory: 500mb
+    networks:
+      - graylog-network
+    restart: always
+
+  graylog:
+    image: graylog/graylog:6.0.9
+    volumes:
+      - data_graylog:/usr/share/graylog/data
+    entrypoint: "/usr/bin/tini -- wait-for-it opensearch:9200 --  /docker-entrypoint.sh"
+    environment:
+      - GRAYLOG_NODE_ID_FILE="/usr/share/graylog/data/data/node-id"
+      - GRAYLOG_HTTP_BIND_ADDRESS="0.0.0.0:9000"
+      - GRAYLOG_HTTP_EXTERNAL_URI="http://127.0.0.1:9000/"
+      - GRAYLOG_ELASTICSEARCH_HOSTS="http://opensearch:9200"
+      - GRAYLOG_MONGODB_URI="mongodb://mongodb:27017/graylog"
+      - GRAYLOG_REPORT_DISABLE_SANDBOX="true"
+      # CHANGE ME (must be at least 16 characters)!
+      - GRAYLOG_PASSWORD_SECRET="@hEgPHv6doYgTQsRB"
+      # Password: "admin"
+      #- GRAYLOG_ROOT_PASSWORD_SHA2=xxxx
+    deploy:
+      resources:
+        limits:
+          memory: 1gb
+    networks:
+      - graylog-network
+    restart: unless-stopped
+    depends_on:
+      mongodb6:
+        condition: service_started
+      opensearch:
+        condition: service_started
+    ports:
+      # Graylog web interface and REST API
+      - "9000:9000/tcp"
+      # Beats
+      - "5044:5044/tcp"
+      # Syslog TCP
+      - "5140:5140/tcp"
+      - "1514:1514" #(e.g. Unifi)
+      - "1515:1515" #(e.g. Tasmota)
+      # Syslog UDP
+      - "5140:5140/udp"
+      # GELF TCP
+      - "12201:12201/tcp"
+      # GELF UDP
+      - "12201:12201/udp"
+      # Forwarder data
+      - "13301:13301/tcp"
+      # Forwarder config
+      - "13302:13302/tcp"
+
+  opensearch:
+    image: opensearchproject/opensearch:2.18.0
+    environment:
+      - node.name=opensearch
+      - discovery.type=single-node
+      - action.auto_create_index=false
+      - "DISABLE_INSTALL_DEMO_CONFIG=true"
+      - "DISABLE_SECURITY_PLUGIN=true"
+      - TZ=Europe/Moscow
+    mem_limit: ${MEM_LIMIT}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536  # maximum number of open files for the OpenSearch user, set to at least 65536 on modern systems
+        hard: 65536
+    volumes:
+      - data_opensearch:/usr/share/opensearch/data
+    ports:
+      - 9200:9200
+      - 9600:9600  # required for Performance Analyzer
+    networks:
+      - graylog-network
+    restart: always
+
+  data-prepper:
+    image: opensearchproject/data-prepper:2.10.2
+    volumes:
+      - ./conf/data-prepper/pipelines.yaml://usr/share/data-prepper/pipelines/pipelines.yaml:ro
+    networks:
+      - graylog-network
+    ports:
+      - 5044:5044
+    mem_limit: ${MEM_LIMIT}
+    restart: always
